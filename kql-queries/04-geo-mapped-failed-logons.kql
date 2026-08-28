@@ -1,0 +1,11 @@
+// Resolves each attacking IP to a country/city using Sentinel's built-in
+// GeoIP function, for the workbook's world-map visualization of where
+// RDP brute-force traffic against this honeypot is originating from.
+SecurityEvent
+| where EventID == 4625
+| where TimeGenerated > ago(24h)
+| extend geo = geo_info_from_ip_address(IpAddress)
+| project TimeGenerated, IpAddress, Account, Country = geo.country, City = geo.city, Latitude = geo.latitude, Longitude = geo.longitude
+| where isnotempty(Country)
+| summarize Attempts = count() by Country, City, Latitude, Longitude
+| order by Attempts desc

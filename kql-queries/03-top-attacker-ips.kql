@@ -1,0 +1,10 @@
+// Ranks source IPs by failed-logon volume against the honeypot, and shows
+// how many distinct usernames each IP tried — a classic brute-force /
+// credential-stuffing signature. Feeds the "Top Attacking IPs" workbook tile.
+SecurityEvent
+| where EventID == 4625
+| where TimeGenerated > ago(24h)
+| summarize FailedAttempts = count(), DistinctUsernamesTried = dcount(Account), Usernames = make_set(Account, 10)
+    by IpAddress
+| order by FailedAttempts desc
+| take 25

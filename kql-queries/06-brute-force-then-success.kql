@@ -1,0 +1,20 @@
+// ANALYTICS RULE QUERY — "Possible Successful Brute Force (4625 -> 4624)"
+// MITRE ATT&CK: T1110 (Brute Force) -> TA0004/TA0001 (Initial Access)
+//
+// High-severity correlation: an IP with a burst of failed logons (4625)
+// followed by a SUCCESSFUL logon (4624) from that same IP within 10 minutes.
+// This is the pattern that indicates a brute-force attack actually succeeded,
+// not just noise from internet background scanning.
+let FailedLogons = SecurityEvent
+    | where EventID == 4625
+    | summarize FailedAttempts = count() by IpAddress, bin(TimeGenerated, 10m)
+    | where FailedAttempts >= 10;
+let SuccessfulLogons = SecurityEvent
+    | where EventID == 4624
+    | where LogonType in (3, 10)
+    | project SuccessTime = TimeGenerated, IpAddress, Account, Computer;
+FailedLogons
+| join kind=inner SuccessfulLogons on IpAddress
+| where SuccessTime between (TimeGenerated .. TimeGenerated + 10m)
+| project TimeGenerated, IpAddress, FailedAttempts, SuccessTime, Account, Computer
+| order by SuccessTime desc

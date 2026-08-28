@@ -1,0 +1,14 @@
+// ANALYTICS RULE QUERY — "RDP Brute Force Attempt Detected"
+// MITRE ATT&CK: T1110 (Brute Force) / T1110.001 (Password Guessing)
+//
+// Fires when a single source IP racks up 10+ failed RDP logons (Event ID 4625)
+// against the honeypot within a 5-minute window. Threshold tuned against this
+// lab's observed internet-scanning traffic to separate noisy background scans
+// from focused brute-force bursts.
+SecurityEvent
+| where EventID == 4625
+| where LogonType in (3, 10) // Network / RemoteInteractive (RDP)
+| summarize FailedAttempts = count(), TargetAccounts = make_set(Account) by IpAddress, bin(TimeGenerated, 5m)
+| where FailedAttempts >= 10
+| project TimeGenerated, IpAddress, FailedAttempts, TargetAccounts
+| order by TimeGenerated desc

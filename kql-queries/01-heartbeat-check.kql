@@ -1,0 +1,7 @@
+// Sanity check: confirm the VM's monitoring agent is alive and reporting in.
+// Run this first after deploying the DCR + Azure Monitor Agent to verify
+// the pipeline is actually connected before trusting any detection results.
+Heartbeat
+| where TimeGenerated > ago(1h)
+| summarize LastHeartbeat = max(TimeGenerated) by Computer, OSType, Version
+| order by LastHeartbeat desc

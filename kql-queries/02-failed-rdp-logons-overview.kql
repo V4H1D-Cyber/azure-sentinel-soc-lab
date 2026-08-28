@@ -1,0 +1,8 @@
+// Overview of failed logon attempts (Event ID 4625) captured on the
+// internet-exposed RDP honeypot VM. This is the raw telemetry feed that
+// every downstream detection in this lab is built on top of.
+SecurityEvent
+| where EventID == 4625
+| where TimeGenerated > ago(24h)
+| project TimeGenerated, Account, IpAddress, WorkstationName, LogonType, FailureReason, Computer
+| order by TimeGenerated desc
