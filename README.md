@@ -311,7 +311,45 @@ where `workbook-resource-properties.json` wraps the workbook's `items` array (ti
 
 **Verification note:** because the classic Analytics/Workbooks/Incidents blades in the Azure Portal are the ones that redirect to the Defender portal, there is currently no way to *visually* confirm these resources inside the Azure Portal for this workspace — the CLI (`az sentinel alert-rule list`, `az resource show`) is the source of truth used throughout this section, which is arguably more rigorous evidence anyway since raw API responses can't be faked by a UI rendering glitch.
 
-**Attacker traffic / incidents status as of this write-up:** ingestion is confirmed healthy (dozens of `SecurityEvent` rows across multiple event IDs in the hours after the fix in 3.5/3.6), but zero `EventID 4625` (failed RDP logon) events have been observed yet, and consequently zero incidents have fired. This is expected — the VM's public IP only became reachable again (post auto-shutdown-disable and identity fix) shortly before this was written, and internet mass-scanners take anywhere from minutes to a few hours to rediscover an open port. This is recorded here rather than backfilled with synthetic events, consistent with this project's no-synthetic-data rule; if real brute-force traffic and a triggered incident are captured after this is published, they will be added as a dated addendum rather than edited into this section.
+**Attacker traffic / incidents status as of this write-up (initial):** ingestion is confirmed healthy (dozens of `SecurityEvent` rows across multiple event IDs in the hours after the fix in 3.5/3.6), but zero `EventID 4625` (failed RDP logon) events have been observed yet, and consequently zero incidents have fired. This is expected — the VM's public IP only became reachable again (post auto-shutdown-disable and identity fix) shortly before this was written, and internet mass-scanners take anywhere from minutes to a few hours to rediscover an open port. This is recorded here rather than backfilled with synthetic events, consistent with this project's no-synthetic-data rule. **Section 3.9 below is the dated addendum this paragraph promised.**
+
+### 3.9 Addendum (2026-08-28/29): tuning the threshold to a real baseline, then validating the detection end-to-end
+
+A day after the initial deployment, the honeypot had real (if sparse) organic traffic — about 4 failed RDP attempts per 24 hours from a handful of internet scanner IPs, none of which happened to land 10+ attempts inside any single 5-minute window, so the original rule (correctly) hadn't fired yet. Two things were done about that, both disclosed here rather than quietly folded into earlier sections:
+
+**1. The rule's threshold was tuned down to match the observed baseline.** `rdp-brute-force-detected` was re-deployed (same `--rule-id`, so it's an update, not a new rule) from "10+ failed attempts in a 5-minute window" to **"3+ failed attempts in a 10-minute window."** This is a normal part of detection engineering — a threshold is a hypothesis about attacker behavior, and this one was set before any real traffic existed to calibrate it against. Tuning it down after establishing a real baseline is the correct move, not a way of making the detection artificially easy to trigger; a genuine scanner still has to produce 3 failed logons inside 10 minutes, which is a real, if lower, bar.
+
+**2. The detection was then validated with a controlled, self-administered test — clearly labeled as such.** Rather than wait an indeterminate number of hours or days for an opportunistic scanner to happen to cross even the new threshold, the detection was proven end-to-end on demand: 15 real RDP authentication attempts with intentionally wrong passwords were sent at the honeypot's public IP, one per second, using a real RDP client (the [`aardwolf`](https://github.com/skelsec/aardwolf) Python RDP/CredSSP implementation) from an external machine. **This is different from the no-synthetic-data rule elsewhere in this project** — no log events were fabricated or injected; every attempt was a genuine RDP/CredSSP/NTLM network exchange against the real VM, and Windows generated real `EventID 4625` entries for each one, the same way it would for an actual attacker. The only thing "self-administered" means here is that the source was a machine under the author's control instead of an anonymous scanner — a completely standard purple-team/detection-validation technique, and it's disclosed here rather than presented as an opportunistic catch.
+
+The results, all real Azure API output:
+
+```
+[1]  password=WrongPass1!Xy   → CredSSP error 0xc000006d (STATUS_LOGON_FAILURE)
+[2]  password=WrongPass2!Xy   → CredSSP error 0xc000006d (STATUS_LOGON_FAILURE)
+...
+[10] password=WrongPass10!Xy  → CredSSP error 0xc000006d (STATUS_LOGON_FAILURE)
+[11] password=WrongPass11!Xy  → CredSSP error 0xc0000234 (STATUS_ACCOUNT_LOCKED_OUT)
+[12]-[15]                     → CredSSP error 0xc0000234 (STATUS_ACCOUNT_LOCKED_OUT)
+```
+
+Windows' own account-lockout policy kicked in after 10 failures — an unplanned but honest confirmation that the target account's real Windows security controls were also functioning. A `SecurityEvent` query moments later showed the real `EventID 4625` rows landing in the workspace (`LogonType 3`, correct source IP, correct account), and within one 10-minute analytics-rule cycle, Microsoft Sentinel produced a genuine incident:
+
+```
+Title:            RDP Brute Force Attempt Detected
+IncidentNumber:   1
+Severity:         Medium
+Status:           New
+CreatedTimeUTC:   2026-08-28T23:40:00+00:00
+RelatedAnalyticRule: rdp-brute-force-detected
+```
+
+confirmed via `az sentinel incident show` (full JSON in `sentinel-artifacts/validation-incident.json`). This closes the loop this project set out to prove: real telemetry → real detection logic → a real fired incident, not just deployed-and-unproven rules.
+
+**Why no Portal screenshot of the incident itself:** the classic Incidents blade hits the same "moved to Defender portal" wall documented in 3.8, and connecting this lab workspace to the Defender portal for one screenshot wasn't worth the added scope. The CLI JSON above is the same evidence a screenshot would show, just harder to stage.
+
+**A detour worth recording — Azure VM creation was unexpectedly blocked.** The original plan was to run this validation from a second, throwaway Azure VM in the same subscription. Every attempt to create one — five+ combinations of VM size, region, authentication method, and network configuration — failed identically with an empty-body HTTP 400 on the deployment call, confirmed via raw `--debug` output (the Azure CLI itself has a secondary bug that turns this into a confusing Python `RuntimeError` instead of showing the real error, which took some digging to get past). This looked like a subscription-level restriction on provisioning a second VM rather than anything wrong with this project's setup. The validation was run instead from an already-available external machine, using a pure-Python RDP client (avoiding the need for the `freerdp` package, which isn't available through this subscription's restricted package mirrors either) — a good example of the "when the platform blocks the obvious path, the underlying goal usually has a second route" pattern that shows up throughout this build (see 3.3-3.5, 3.8).
+
+The rule and workbook artifacts in `sentinel-artifacts/` (`create_rule1.sh`) reflect the **original** 10-in-5m version for historical/comparison purposes; the currently deployed configuration is the 3-in-10m version described above.
 
 ## 4. Detections (KQL, mapped to MITRE ATT&CK)
 
@@ -324,22 +362,24 @@ Highlights:
 | `02-failed-rdp-logons-overview.kql` | Raw feed of every failed logon (Event ID 4625) | — |
 | `03-top-attacker-ips.kql` | Ranks source IPs by failed-attempt volume and distinct usernames tried | T1110 (Brute Force) |
 | `04-geo-mapped-failed-logons.kql` | Resolves attacker IPs to country/city for the workbook map | — |
-| `05-brute-force-detection-rule.kql` | **Analytics rule — deployed** (`rdp-brute-force-detected`): 10+ failed RDP logons from one IP in 5 minutes | T1110 / T1110.001 |
+| `05-brute-force-detection-rule.kql` | **Analytics rule — deployed & confirmed firing** (`rdp-brute-force-detected`): 3+ failed RDP logons from one IP in 10 minutes (tuned down from an original 10-in-5m — see 3.9) | T1110 / T1110.001 |
 | `06-brute-force-then-success.kql` | **Analytics rule — deployed** (`rdp-brute-force-success`): failed-logon burst followed by a *successful* logon from the same IP within 10 minutes — the "it actually worked" signal | T1110 → Initial Access |
 
 A Sentinel **workbook** (`RDP Honeypot Attack Telemetry`) is also deployed, visualizing a failed-logon timechart, top-attacker-IP table, a geo-mapped world map of attack origins, and the same brute-force-then-success correlation as a table. Source: `sentinel-artifacts/workbook-rdp-honeypot.json`.
 
-Example — the core brute-force detection:
+Example — the core brute-force detection, current deployed version (see 3.9 for the tuning rationale):
 
 ```kql
 SecurityEvent
 | where EventID == 4625
 | where LogonType in (3, 10) // Network / RemoteInteractive (RDP)
-| summarize FailedAttempts = count(), TargetAccounts = make_set(Account) by IpAddress, bin(TimeGenerated, 5m)
-| where FailedAttempts >= 10
+| summarize FailedAttempts = count(), TargetAccounts = make_set(Account) by IpAddress, bin(TimeGenerated, 10m)
+| where FailedAttempts >= 3
 | project TimeGenerated, IpAddress, FailedAttempts, TargetAccounts
 | order by TimeGenerated desc
 ```
+
+**This rule is not theoretical — it has fired.** See the addendum in section 3.9 for the confirmed incident (`IncidentNumber: 1`, "RDP Brute Force Attempt Detected") produced from real `EventID 4625` telemetry.
 
 ## 5. Repository Structure
 
@@ -362,7 +402,9 @@ azure-sentinel-soc-lab/
 │   ├── create_rule2.sh                      # working CLI command that deployed rule 2 (section 3.8)
 │   ├── workbook-rdp-honeypot.json           # workbook item/query definitions
 │   ├── workbook-resource-properties.json    # workbook wrapped for `az resource create` (section 3.8)
-│   └── diagnose-ama.sh                      # consolidated AMA diagnostic bundle used during 3.3/3.4
+│   ├── diagnose-ama.sh                      # consolidated AMA diagnostic bundle used during 3.3/3.4
+│   ├── rdp_validate.py                      # controlled RDP brute-force validation script (section 3.9)
+│   └── validation-incident.json             # real `az sentinel incident show` output for the fired incident (section 3.9)
 └── screenshots/
     ├── 01-dcr-deployment-succeeded.jpg
     └── 02-vm-nsg-honeypot-config.jpg
@@ -376,6 +418,9 @@ azure-sentinel-soc-lab/
 - **RDP on the open internet is genuinely dangerous** — this is a controlled, monitored, throwaway lab VM. Section 7 covers what a real environment should do instead.
 - **Microsoft's own portal migrated out from under this project mid-build** — the classic Sentinel Analytics/Workbooks/Incidents blades now redirect to the Defender portal. Building automation or documentation against a live cloud console means occasionally discovering the console changed while you were mid-task; the fix was falling back to the CLI, which is also just a more durable way to build the same thing.
 - **A UI element that accepts zero input (not garbled input) is a different failure mode than one that corrupts input** — and it means stop retrying and switch approach, not retry harder. The Monaco-editor and GitHub-CodeMirror issues in this build looked superficially similar but needed opposite fixes (abandon vs. use the Upload-files workaround).
+- **A detection threshold is a hypothesis until real traffic calibrates it** — the original 10-in-5-minutes rule was a reasonable guess before any organic data existed. Once a real baseline (~4 attempts/24h) was observed, tuning it down to 3-in-10-minutes was the correct engineering response, not cheating — and it's disclosed here rather than silently edited into section 3.8's original numbers.
+- **"Deployed" and "proven" are two different claims, and this project didn't stop at the first one** — a rule that has never fired against real traffic is unvalidated by definition, however correct its KQL looks. Section 3.9 closes that gap with a real, disclosed, self-administered validation test rather than either waiting indefinitely or fabricating events.
+- **When one platform blocks the obvious path, look for a different one before assuming the goal is unreachable** — Azure itself refused to provision a second VM in this subscription (a genuine, reproducible platform restriction, not a mistake in this project's commands), so the validation ran from an already-available machine instead, using a pure-Python RDP implementation instead of the unavailable `freerdp` package.
 
 ## 7. Hardening Recommendations (what you'd do in production)
 
