@@ -1,0 +1,95 @@
+{
+  "$schema": "https://schema.management.azure.com/schemas/2019-04-01/deploymentTemplate.json#",
+  "contentVersion": "1.0.0.0",
+  "parameters": {
+    "workspaceName": {
+      "type": "string",
+      "defaultValue": "sentinel-lab-workspace",
+      "metadata": { "description": "Name of the Sentinel-enabled Log Analytics workspace." }
+    }
+  },
+  "resources": [
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2023-02-01-preview",
+      "name": "[concat(parameters('workspaceName'), '/Microsoft.SecurityInsights/', guid('rdp-brute-force-detected'))]",
+      "kind": "Scheduled",
+      "properties": {
+        "displayName": "RDP Brute Force Attempt Detected",
+        "description": "Fires when a single source IP racks up 10+ failed RDP logons (Event ID 4625) against the honeypot within a 5-minute window. Threshold tuned against this lab's observed internet-scanning baseline to separate noisy background scans from focused brute-force bursts.",
+        "severity": "Medium",
+        "enabled": true,
+        "query": "SecurityEvent\n| where EventID == 4625\n| where LogonType in (3, 10)\n| summarize FailedAttempts = count(), TargetAccounts = make_set(Account) by IpAddress, bin(TimeGenerated, 5m)\n| where FailedAttempts >= 10\n| project TimeGenerated, IpAddress, FailedAttempts, TargetAccounts",
+        "queryFrequency": "PT5M",
+        "queryPeriod": "PT5M",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "PT1H",
+        "suppressionEnabled": false,
+        "tactics": ["CredentialAccess"],
+        "techniques": ["T1110"],
+        "entityMappings": [
+          {
+            "entityType": "IP",
+            "fieldMappings": [{ "identifier": "Address", "columnName": "IpAddress" }]
+          }
+        ],
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "PT5H",
+            "matchingMethod": "AllEntities",
+            "groupByEntities": ["IP"]
+          }
+        }
+      }
+    },
+    {
+      "type": "Microsoft.OperationalInsights/workspaces/providers/alertRules",
+      "apiVersion": "2023-02-01-preview",
+      "name": "[concat(parameters('workspaceName'), '/Microsoft.SecurityInsights/', guid('rdp-brute-force-success'))]",
+      "kind": "Scheduled",
+      "properties": {
+        "displayName": "Possible Successful Brute Force (4625 -> 4624)",
+        "description": "High-severity correlation: an IP with a burst of failed logons (4625) followed by a SUCCESSFUL logon (4624) from that same IP within 10 minutes. Indicates a brute-force attack that actually succeeded, not just internet background-scan noise.",
+        "severity": "High",
+        "enabled": true,
+        "query": "let FailedLogons = SecurityEvent\n    | where EventID == 4625\n    | summarize FailedAttempts = count() by IpAddress, bin(TimeGenerated, 10m)\n    | where FailedAttempts >= 10;\nlet SuccessfulLogons = SecurityEvent\n    | where EventID == 4624\n    | where LogonType in (3, 10)\n    | project SuccessTime = TimeGenerated, IpAddress, Account, Computer;\nFailedLogons\n| join kind=inner SuccessfulLogons on IpAddress\n| where SuccessTime between (TimeGenerated .. TimeGenerated + 10m)\n| project TimeGenerated, IpAddress, FailedAttempts, SuccessTime, Account, Computer",
+        "queryFrequency": "PT10M",
+        "queryPeriod": "PT10M",
+        "triggerOperator": "GreaterThan",
+        "triggerThreshold": 0,
+        "suppressionDuration": "PT1H",
+        "suppressionEnabled": false,
+        "tactics": ["CredentialAccess", "InitialAccess"],
+        "techniques": ["T1110"],
+        "entityMappings": [
+          {
+            "entityType": "IP",
+            "fieldMappings": [{ "identifier": "Address", "columnName": "IpAddress" }]
+          },
+          {
+            "entityType": "Account",
+            "fieldMappings": [{ "identifier": "FullName", "columnName": "Account" }]
+          },
+          {
+            "entityType": "Host",
+            "fieldMappings": [{ "identifier": "FullName", "columnName": "Computer" }]
+          }
+        ],
+        "incidentConfiguration": {
+          "createIncident": true,
+          "groupingConfiguration": {
+            "enabled": true,
+            "reopenClosedIncident": false,
+            "lookbackDuration": "PT5H",
+            "matchingMethod": "AllEntities",
+            "groupByEntities": ["IP", "Account"]
+          }
+        }
+      }
+    }
+  ]
+}
