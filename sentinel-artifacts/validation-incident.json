@@ -1,0 +1,30 @@
+{
+  "classification": null,
+  "classificationComment": null,
+  "classificationReason": null,
+  "createdTimeUtc": "2026-08-28T23:50:48.376666+00:00",
+  "description": "Fires when a single source IP racks up 3+ failed RDP logons (Event ID 4625) within a 10-minute window. Threshold tuned down from the original 10-in-5m design on 2026-08-28 after establishing a real observed baseline of roughly 4 failed attempts per 24h from internet scanners hitting the honeypot.",
+  "etag": "\"d503a2f4-0000-0100-0000-6a921edd0000\"",
+  "firstActivityTimeUtc": "2026-08-28T23:40:00+00:00",
+  "id": "/subscriptions/4a153f29-9cbb-4827-8945-df8eb83969d7/resourceGroups/sentinel-lab-rg/providers/Microsoft.OperationalInsights/workspaces/sentinel-lab-workspace/providers/Microsoft.SecurityInsights/Incidents/df5e668e-ebb1-41b3-a275-da3e5fa93797",
+  "incidentNumber": 1,
+  "incidentUrl": "https://portal.azure.com/#asset/Microsoft_Azure_Security_Insights/Incident/subscriptions/4a153f29-9cbb-4827-8945-df8eb83969d7/resourceGroups/sentinel-lab-rg/providers/Microsoft.OperationalInsights/workspaces/sentinel-lab-workspace/providers/Microsoft.SecurityInsights/Incidents/df5e668e-ebb1-41b3-a275-da3e5fa93797",
+  "labels": [],
+  "lastActivityTimeUtc": "2026-08-28T23:40:00+00:00",
+  "lastModifiedTimeUtc": "2026-08-28T23:50:48.376666+00:00",
+  "name": "df5e668e-ebb1-41b3-a275-da3e5fa93797",
+  "owner": {
+    "assignedTo": null,
+    "email": null,
+    "objectId": null,
+    "userPrincipalName": null
+  },
+  "relatedAnalyticRuleIds": [
+    "/subscriptions/4a153f29-9cbb-4827-8945-df8eb83969d7/resourceGroups/sentinel-lab-rg/providers/Microsoft.OperationalInsights/workspaces/sentinel-lab-workspace/providers/Microsoft.SecurityInsights/alertRules/rdp-brute-force-detected"
+  ],
+  "resourceGroup": "sentinel-lab-rg",
+  "severity": "Medium",
+  "status": "New",
+  "title": "RDP Brute Force Attempt Detected",
+  "type": "Microsoft.SecurityInsights/Incidents"
+}
